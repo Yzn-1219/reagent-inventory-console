@@ -8,7 +8,7 @@
   var U = Store.util;
 
   /* 版本号：构建标识写在 index.html 里（随页面一起更新），这里只做兜底 */
-  var APP_VER = '2.2';
+  var APP_VER = '2.4';
   var APP_BUILD = window.APP_BUILD || 'dev';
 
   var UI = {
@@ -741,8 +741,64 @@
 
   /* ---------------- 出库 ---------------- */
   function blankOut() {
-    return { reagentId: '', items: {}, operator_name: myName(), purpose: '', project: '', txn_date: today(), note: '' };
+    return { reagentId: '', items: {}, total: '', short: 0, operator_name: myName(), purpose: '', project: '', txn_date: today(), note: '' };
   }
+
+  /* 出库合计：按到货日期先进先出，自动把总数拆到各批次 */
+  function distributeOut(total) {
+    var d = UI.draftOut;
+    if (!d || !d.reagentId) return null;
+    var left = U.round(U.n(total));
+    if (left <= 0) { d.items = {}; d.short = 0; return { rest: 0 }; }
+    var bs = batchesOf(d.reagentId).filter(function (b) { return U.n(b.qty_left) > 0; });
+    var items = {};
+    bs.forEach(function (b) {
+      if (left <= 0) return;
+      var avail = U.n(b.qty_left);
+      var take = Math.min(avail, left);
+      if (take > 0) { items[b.id] = U.round(take); left = U.round(left - take); }
+    });
+    d.items = items;
+    d.short = U.round(left);   /* 库存不够、没能分配出去的部分 */
+    return { rest: d.short };
+  }
+
+  function outSumHtml() {
+    var d = UI.draftOut || {};
+    var sel = S.reagents.filter(function (r) { return r.id === d.reagentId; })[0];
+    if (!sel) return '';
+    var avail = 0;
+    batchesOf(sel.id).forEach(function (b) { avail += U.n(b.qty_left); });
+    var used = 0;
+    Object.keys(d.items || {}).forEach(function (k) { used += U.n(d.items[k]); });
+    avail = U.round(avail); used = U.round(used);
+    var over = used > avail + 1e-9;
+    var short = U.round(U.n(d.short));
+    return '<span>已分配 <b>' + num(used) + '</b> ' + esc(sel.unit || '') + '</span>' +
+      '<span class="dot">·</span>' +
+      '<span>可领 <b>' + num(avail) + '</b> ' + esc(sel.unit || '') + '</span>' +
+      (short > 0
+        ? '<span class="warn">库存不足，还差 ' + num(short) + ' ' + esc(sel.unit || '') + ' 没分配</span>'
+        : (over ? '<span class="warn">超出库存 ' + num(U.round(used - avail)) + '</span>' : ''));
+  }
+
+  /* 填总数后不回整页重绘，只同步各批次输入框，避免光标丢失 */
+  function syncOutInputs() {
+    var d = UI.draftOut;
+    if (!d) return;
+    [].slice.call(document.querySelectorAll('[data-bind="item"][data-batch]')).forEach(function (el) {
+      var id = el.getAttribute('data-batch');
+      var v = d.items[id];
+      el.value = (v == null || v === '') ? '' : v;
+    });
+    refreshOutSum();
+  }
+
+  function refreshOutSum() {
+    var el = document.getElementById('out-sum');
+    if (el) el.innerHTML = outSumHtml();
+  }
+
   function viewOutbound() {
     if (!UI.draftOut) UI.draftOut = blankOut();
     var d = UI.draftOut;
@@ -750,6 +806,9 @@
       .sort(function (a, b) { return (a.name || '').localeCompare(b.name || '', 'zh'); });
     var sel = S.reagents.filter(function (r) { return r.id === d.reagentId; })[0];
     var bs = sel ? batchesOf(sel.id).filter(function (b) { return U.n(b.qty_left) > 0; }) : [];
+    /* 单位是「瓶」时用「瓶数」的说法，更贴近实验室口语 */
+    var outUnit = (sel && sel.unit) ? sel.unit : '瓶';
+    var outLabel = outUnit === '瓶' ? '本次出库瓶数' : '本次出库数量';
 
     var batchHtml = '';
     if (sel) {
@@ -778,8 +837,19 @@
       '<option value="">— 选择试剂 —</option>' +
       rs.map(function (r) { return '<option value="' + r.id + '"' + (d.reagentId === r.id ? ' selected' : '') + '>' + esc(r.name) + '（余 ' + num(stockOf(r.id)) + ' ' + esc(r.unit) + '）</option>'; }).join('') +
       '</select></div>' +
-      (sel ? '<div class="fs"><span class="fs-t">从哪个批次出</span><span class="fs-s">默认先用早到货的</span></div>' +
-      '<div class="field"><label>选择批次与数量</label><div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">' + batchHtml + '</div></div>' : '') +
+      (sel ? '<div class="fs"><span class="fs-t">出多少</span><span class="fs-s">从最早到货的批次开始扣</span></div>' +
+      '<div class="field"><label>' + outLabel + '</label>' +
+      '<div class="qty"><input data-bind="total" type="number" step="any" inputmode="decimal" value="' + esc(d.total) + '" placeholder="0">' +
+      '<span class="qty-u">' + esc(outUnit) + '</span></div>' +
+      '<div class="out-quick">' +
+      [1, 2, 5].map(function (q) {
+        return '<button type="button" class="btn btn-xs" data-act="quick-out-qty" data-qty="' + q + '">' + q + ' ' + esc(outUnit) + '</button>';
+      }).join('') +
+      '<span class="tip" style="margin:0">领几瓶就填几，缺货会自动提示</span>' +
+      '</div></div>' +
+      '<div class="field"><label>批次明细</label>' +
+      '<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">' + batchHtml + '</div>' +
+      '<div class="out-sum" id="out-sum">' + outSumHtml() + '</div></div>' : '') +
       '<div class="fs"><span class="fs-t">谁领的、干什么用</span></div>' +
       '<div class="row2">' +
       '<div class="field"><label>领用人</label><input data-bind="operator_name" value="' + esc(d.operator_name) + '" placeholder="谁领的"></div>' +
@@ -1820,10 +1890,24 @@
     if (act === 'fill-first') {
       var d = UI.draftOut;
       var bs = batchesOf(d.reagentId).filter(function (b) { return U.n(b.qty_left) > 0; });
-      if (bs.length) { d.items = {}; d.items[bs[0].id] = U.n(bs[0].qty_left); render(); }
+      if (bs.length) {
+        d.items = {}; d.items[bs[0].id] = U.n(bs[0].qty_left);
+        d.total = U.n(bs[0].qty_left); d.short = 0;
+        render();
+      }
       return;
     }
-    if (act === 'clear-items') { UI.draftOut.items = {}; render(); return; }
+    if (act === 'clear-items') { UI.draftOut.items = {}; UI.draftOut.total = ''; UI.draftOut.short = 0; render(); return; }
+    if (act === 'quick-out-qty') {
+      var qq = U.n(t.getAttribute('data-qty'));
+      if (!UI.draftOut || !UI.draftOut.reagentId || qq <= 0) return;
+      UI.draftOut.total = qq;
+      distributeOut(qq);
+      syncOutInputs();
+      var ti = document.querySelector('[data-form="outbound"] [data-bind="total"]');
+      if (ti) ti.value = qq;
+      return;
+    }
     if (act === 'clear-adjust') { UI.adjust = {}; render(); return; }
 
     if (act === 'save-reagent') {
@@ -1991,9 +2075,20 @@
       return;
     }
     if (bind && el.closest('[data-form="outbound"]') && UI.draftOut) {
-      if (bind === 'item') { UI.draftOut.items[el.getAttribute('data-batch')] = el.value; return; }
+      if (bind === 'item') {
+        UI.draftOut.items[el.getAttribute('data-batch')] = el.value;
+        UI.draftOut.short = 0;
+        refreshOutSum();
+        return;
+      }
+      if (bind === 'total') {
+        UI.draftOut.total = el.value;
+        if (String(el.value).trim() !== '') { distributeOut(el.value); syncOutInputs(); }
+        else { UI.draftOut.items = {}; syncOutInputs(); }
+        return;
+      }
       UI.draftOut[bind] = el.value;
-      if (bind === 'reagentId') { UI.draftOut.items = {}; render(true); }
+      if (bind === 'reagentId') { UI.draftOut.items = {}; UI.draftOut.total = ''; render(true); }
       return;
     }
     var adj = el.getAttribute && el.getAttribute('data-adjust');
@@ -2022,7 +2117,7 @@
         render(true); return;
       }
       if (el.closest('[data-form="outbound"]') && UI.draftOut) {
-        UI.draftOut.reagentId = el.value; UI.draftOut.items = {}; render(true); return;
+        UI.draftOut.reagentId = el.value; UI.draftOut.items = {}; UI.draftOut.total = ''; render(true); return;
       }
     }
     if (b === 'unit' && el.closest('[data-form="inbound"]') && UI.draftIn) {
@@ -2252,6 +2347,10 @@
         .map(function (k) { return { batchId: k, qty: o.items[k] }; });
       if (!o.reagentId) { showErr('out-err', '请选择试剂'); return; }
       if (!items.length) { showErr('out-err', '请填写领用数量'); return; }
+      if (U.n(o.short) > 0) {
+        var gotSum = items.reduce(function (s, x) { return s + U.n(x.qty); }, 0);
+        if (!confirm('库存不足，还差 ' + num(U.n(o.short)) + ' 没能分配。\n这次将按已分配的 ' + num(U.round(gotSum)) + ' 出库，继续吗？')) return;
+      }
       var el3 = document.getElementById('out-err');
       if (el3) el3.textContent = '提交中…';
       Store.addOutbound({

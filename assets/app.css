@@ -412,6 +412,10 @@ select.filter:focus { border-color: var(--brand); }
   border-left: 1px solid var(--line); white-space: nowrap; min-width: 34px; justify-content: center;
 }
 .qty:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
+/* 数字输入框的上下箭头会挤到单位块，隐藏掉 */
+.qty input[type=number]::-webkit-outer-spin-button,
+.qty input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.qty input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 
 tr.sub-row > td { background: #fafcff; }
 
@@ -630,6 +634,23 @@ tr.sub-row > td { background: #fafcff; }
   .transfer-banner .tb-ops { width: 100%; }
   .transfer-banner .tb-ops .btn { flex: 1; }
 }
+
+/* ============ 出库合计 ============ */
+.out-sum {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 12px; padding: 9px 13px; border-radius: 10px;
+  background: #f7faff; border: 1px solid var(--line-soft);
+  font-size: 12.5px; color: var(--muted);
+}
+.out-sum b { color: var(--text); font-variant-numeric: tabular-nums; }
+.out-sum .dot { color: var(--hint); }
+.out-sum .warn { margin-left: auto; color: var(--danger); font-weight: 650; }
+
+/* 出库瓶数快捷选择 */
+.out-quick { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
+.out-quick .btn { background: #fff; }
+.out-quick .btn:hover { border-color: var(--brand); color: var(--brand); }
+.out-quick .tip { font-size: 11.5px; color: var(--hint); }
 
 /* ============ 我的小组（多组切换） ============ */
 .team-chip { cursor: pointer; transition: background .16s; }
